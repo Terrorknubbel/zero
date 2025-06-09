@@ -3,6 +3,7 @@ module zero
 go 1.24.3
 
 require (
+	github.com/cretz/bine v0.2.0
 	github.com/onsi/ginkgo/v2 v2.23.4
 	github.com/onsi/gomega v1.37.0
 	github.com/wailsapp/wails/v2 v2.10.1
