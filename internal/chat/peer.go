@@ -97,25 +97,26 @@ func NewPeer(name string) *Peer {
 }
 
 // Pre‑Key‑Bundle (wird veröffentlicht)
-func (p *Peer) Bundle() map[string][]byte {
-    return map[string][]byte{
-        "idPub":  p.identityPrivKey.PublicKey().Bytes(),
-        "spkPub": p.signedPreKeyPriv.PublicKey().Bytes(),
-        "sigPub": p.signaturePubKey,
-        "spkSig": p.signedPreKeySig,
+func (p *Peer) Bundle() Bundle {
+    return Bundle{
+        IdentityPub:  p.identityPrivKey.PublicKey().Bytes(),
+        SignedPreKeyPub: p.signedPreKeyPriv.PublicKey().Bytes(),
+        SignaturePub: p.signaturePubKey,
+        SignedPreKeySig: p.signedPreKeySig,
     }
 }
 
 // Initiator  – startet X3DH + erster Send‑Chain‑Key
-func (p *Peer) InitiateSession(remoteBundle map[string][]byte) map[string][]byte {
+func (p *Peer) InitiateSession(remoteBundle Bundle) map[string][]byte {
     // 1) Signatur prüfen
-    if !ed25519.Verify(ed25519.PublicKey(remoteBundle["sigPub"]), remoteBundle["spkPub"], remoteBundle["spkSig"]) {
+    if !ed25519.Verify(ed25519.PublicKey(remoteBundle.SignaturePub),
+				remoteBundle.SignedPreKeyPub, remoteBundle.SignedPreKeySig) {
         log.Fatalf("[%s] Ungültige SPK‑Signatur", p.Name)
     }
 
     curve := ecdh.X25519()
-    remoteIdPub, _  := curve.NewPublicKey(remoteBundle["idPub"])
-    remoteSpkPub, _ := curve.NewPublicKey(remoteBundle["spkPub"])
+    remoteIdPub, _  := curve.NewPublicKey(remoteBundle.IdentityPub)
+    remoteSpkPub, _ := curve.NewPublicKey(remoteBundle.SignedPreKeyPub)
 
 		st := p.state(remoteIdPub.Bytes())
 
