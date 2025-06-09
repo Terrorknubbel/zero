@@ -1,4 +1,4 @@
-package main
+package chat
 
 import (
     "bytes"
@@ -160,12 +160,17 @@ func (p *Peer) AcceptSession(initMsg map[string][]byte) {
 }
 
 // Verschlüsselt eine Nachricht (erzeugt bei Bedarf neue Send‑Chain)
-func (p *Peer) Encrypt(dst *Peer, plaintext []byte) (string, []byte) {
+func (p *Peer) Encrypt(dst *Peer, plaintext []byte) ([]byte, []byte, []byte, error) {
     // Falls noch keine Send‑Chain existiert (erster Send nach Richtungswechsel)
     if p.sendChain == nil {
         curve := ecdh.X25519()
-        p.dhSendPrivKey, _ = curve.GenerateKey(rand.Reader) // neues DH‑Paar
-        secret, _ := p.dhSendPrivKey.ECDH(p.dhRecvPubKey)
+				var err error
+        p.dhSendPrivKey, err = curve.GenerateKey(rand.Reader) // neues DH‑Paar
+				if (err != nil) { return nil, nil, nil, err }
+
+        secret, err := p.dhSendPrivKey.ECDH(p.dhRecvPubKey)
+				if (err != nil) { return nil, nil, nil, err }
+
 				var chainKey []byte
         p.rootKey, chainKey = kdfRoot(p.rootKey, secret)
         p.sendChain = NewSymmRatchet(chainKey)
@@ -174,9 +179,8 @@ func (p *Peer) Encrypt(dst *Peer, plaintext []byte) (string, []byte) {
     msgKey := p.sendChain.Next()
     header := p.dhSendPrivKey.PublicKey().Bytes()
 
-    nonce, ct, _ := encryptAEAD(msgKey, plaintext, header)
-    fmt.Printf("[%s] → %q\n", p.Name, plaintext)
-    return dst.Decrypt(header, nonce, ct)
+    nonce, ciphertext, err := encryptAEAD(msgKey, plaintext, header)
+		return header, nonce, ciphertext, err
 }
 
 // Entschlüsselt eine Nachricht (dreht DH‑Ratchet, falls Header‑Key neu ist)
