@@ -8,8 +8,8 @@ import (
 type Session struct {
 	Name string
 	localPeer *Peer
-	remotePeer *Peer
 	remoteID []byte
+	transport Transport
 }
 
 type sessionState struct {
@@ -20,22 +20,30 @@ type sessionState struct {
     sendChain, recvChain *SymmRatchet
 }
 
-func NewSession(name string) *Session {
-	return &Session{
+func NewSession(name string, transport Transport) *Session {
+	s := &Session{
 		Name:name,
 		localPeer:NewPeer(name),
+		transport: transport,
 	}
+
+	if dt, ok := transport.(*DummyTransport); ok {
+		dt.Register(s)
+	}
+
+	return s
 }
 
-func (s *Session) Handshake(dst *Peer) error {
-	s.remotePeer = dst
-	s.remoteID = dst.IdentityPublicKey()
+func (s *Session) StartHandshake(remote Bundle) error {
+	s.remoteID = remote.IdentityPub
 
-	initMsg := s.localPeer.InitiateSession(dst.Bundle())
-	dst.AcceptSession(initMsg)
+	initMsg := s.localPeer.InitiateSession(remote)
+	return s.transport.SendInit(s.remoteID, initMsg)
+}
 
-	fmt.Printf("[%s] RootKey₀: %s\n", s.Name, b64(s.localPeer.state(s.remoteID).rootKey))
-	// TODO: Error Handling
+func (s *Session) onInit(initMsg InitMessage) error {
+	s.remoteID = initMsg["idPub"]
+	s.localPeer.AcceptSession(initMsg)
 	return nil
 }
 
@@ -45,7 +53,12 @@ func (s *Session) Send(plaintext []byte) error {
 		return err
 	}
 
-	name, plaintext := s.remotePeer.Decrypt(s.localPeer.IdentityPublicKey(), header, nonce, cyphertext)
-	fmt.Printf("[%s] → %q\n", name, plaintext)
+	msg := CipherMessage{Header: header, Nonce: nonce, Cipher: cyphertext}
+	return s.transport.SendCipher(s.remoteID, msg)
+}
+
+func (s *Session) onCipher(m CipherMessage) error {
+	_, plain := s.localPeer.Decrypt(s.remoteID, m.Header, m.Nonce, m.Cipher)
+	fmt.Printf("[%s] ← %q\n", s.Name, plain)
 	return nil
 }

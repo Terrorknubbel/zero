@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"zero/internal/chat"
 )
 
@@ -13,20 +12,14 @@ type App struct {
 }
 
 func NewApp() *App {
-	return &App{
-		session: chat.NewSession("Alice"),
-	}
+	return &App{}
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
-	bob := chat.NewPeer("Bob")
-	err := a.session.Handshake(bob)
-	if err != nil {
-		log.Fatal(err)
-	}
-
+	tp := chat.NewDummyTransport()
+	a.session = chat.NewSession("Alice", tp)
 }
 
 func (a *App) Greet(name string) string {

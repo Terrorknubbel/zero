@@ -1,16 +1,9 @@
 package chat
 
 import (
-	"testing"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
-
-func TestDoubleRatchet(t *testing.T) {
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "Double-Ratchet Integration Suite")
-}
 
 var _ = Describe("Double-Ratchet End-to-End (Encrypt/Decrypt API)", func() {
 	It("encrypts and decrypts all messages correctly over two sessions", func() {
