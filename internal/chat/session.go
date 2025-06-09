@@ -62,3 +62,7 @@ func (s *Session) Receive(m CipherMessage) error {
 	fmt.Printf("[%s] ← %q\n", s.Name, plain)
 	return nil
 }
+
+func (s *Session) LocalBundle() Bundle {
+	return s.localPeer.Bundle()
+}

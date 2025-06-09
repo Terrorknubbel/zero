@@ -195,6 +195,7 @@ func (p *Peer) Encrypt(remoteID []byte, plaintext []byte) ([]byte, []byte, []byt
     header := st.dhSendPrivKey.PublicKey().Bytes()
 
     nonce, ciphertext, err := encryptAEAD(msgKey, plaintext, header)
+    fmt.Printf("[%s] → %q\n", p.Name, plaintext)
 		return header, nonce, ciphertext, err
 }
 
@@ -217,7 +218,6 @@ func (p *Peer) Decrypt(remoteID []byte, header []byte, nonce []byte, ct []byte) 
     // 2) Nachrichtenschlüssel ziehen & entschlüsseln
     msgKey := st.recvChain.Next()
     plaintext, err := decryptAEAD(msgKey, nonce, ct, header); check(err)
-    fmt.Printf("[%s] ← %q\n", p.Name, plaintext)
 		return p.Name, plaintext
 }
 
