@@ -41,7 +41,7 @@ func (s *Session) StartHandshake(remote Bundle) error {
 	return s.transport.SendInit(s.remoteID, initMsg)
 }
 
-func (s *Session) onInit(initMsg InitMessage) error {
+func (s *Session) HandleInit(initMsg InitMessage) error {
 	s.remoteID = initMsg["idPub"]
 	s.localPeer.AcceptSession(initMsg)
 	return nil
@@ -57,7 +57,7 @@ func (s *Session) Send(plaintext []byte) error {
 	return s.transport.SendCipher(s.remoteID, msg)
 }
 
-func (s *Session) onCipher(m CipherMessage) error {
+func (s *Session) Receive(m CipherMessage) error {
 	_, plain := s.localPeer.Decrypt(s.remoteID, m.Header, m.Nonce, m.Cipher)
 	fmt.Printf("[%s] ← %q\n", s.Name, plain)
 	return nil

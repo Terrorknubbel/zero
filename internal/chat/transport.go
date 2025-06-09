@@ -43,7 +43,7 @@ func (t *DummyTransport) SendInit(toID []byte, msg InitMessage) error {
 	if !ok {
 		return fmt.Errorf("unknown peer")
 	}
-	return dst.onInit(msg)
+	return dst.HandleInit(msg)
 }
 
 // Ciphertext zustellen
@@ -52,5 +52,5 @@ func (t *DummyTransport) SendCipher(toID []byte, m CipherMessage) error {
 	if !ok {
 		return fmt.Errorf("unknown peer")
 	}
-	return dst.onCipher(m)
+	return dst.Receive(m)
 }
