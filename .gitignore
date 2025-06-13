@@ -33,3 +33,4 @@ go.work.sum
 
 frontend/node_modules
 build
+frontend/dist
