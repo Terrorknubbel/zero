@@ -5,7 +5,6 @@ import (
     "crypto/aes"
     "crypto/cipher"
     "crypto/ecdh"
-    "crypto/ed25519"
     "crypto/hkdf"
     "crypto/rand"
     "crypto/sha256"
@@ -66,10 +65,6 @@ type Peer struct {
 
     // Längerfristige X3DH‑Schlüssel
     identityPrivKey      *ecdh.PrivateKey              // IK  (priv)
-    signedPreKeyPriv     *ecdh.PrivateKey              // SPK (priv)
-    signaturePrivKey     ed25519.PrivateKey            // Ed25519‑Signer
-    signaturePubKey      ed25519.PublicKey
-    signedPreKeySig      []byte                       // Sign(SPK)
 
     // ─── Alle aktiven Sitzungen ───────────────────────
     //   Key: Remote-Identity-Public-Key (Base64 oder []byte-string)
@@ -80,18 +75,10 @@ func NewPeer(name string) *Peer {
     curve := ecdh.X25519()
 
     idPriv, _  := curve.GenerateKey(rand.Reader)      // IK
-    spkPriv, _ := curve.GenerateKey(rand.Reader)      // SPK
-
-    sigPub, sigPriv, _ := ed25519.GenerateKey(rand.Reader)
-    spkSig := ed25519.Sign(sigPriv, spkPriv.PublicKey().Bytes())
 
     return &Peer{
         Name:               name,
         identityPrivKey:    idPriv,
-        signedPreKeyPriv:   spkPriv,
-        signaturePrivKey:   sigPriv,
-        signaturePubKey:    sigPub,
-        signedPreKeySig:    spkSig,
 				sess:              make(map[string]*sessionState),
     }
 }
@@ -100,23 +87,13 @@ func NewPeer(name string) *Peer {
 func (p *Peer) Bundle() Bundle {
     return Bundle{
         IdentityPub:  p.identityPrivKey.PublicKey().Bytes(),
-        SignedPreKeyPub: p.signedPreKeyPriv.PublicKey().Bytes(),
-        SignaturePub: p.signaturePubKey,
-        SignedPreKeySig: p.signedPreKeySig,
     }
 }
 
 // Initiator  – startet X3DH + erster Send‑Chain‑Key
 func (p *Peer) InitiateSession(remoteBundle Bundle) map[string][]byte {
-    // 1) Signatur prüfen
-    if !ed25519.Verify(ed25519.PublicKey(remoteBundle.SignaturePub),
-				remoteBundle.SignedPreKeyPub, remoteBundle.SignedPreKeySig) {
-        log.Fatalf("[%s] Ungültige SPK‑Signatur", p.Name)
-    }
-
     curve := ecdh.X25519()
     remoteIdPub, _  := curve.NewPublicKey(remoteBundle.IdentityPub)
-    remoteSpkPub, _ := curve.NewPublicKey(remoteBundle.SignedPreKeyPub)
 
 		st := p.state(remoteIdPub.Bytes())
 
@@ -124,14 +101,14 @@ func (p *Peer) InitiateSession(remoteBundle Bundle) map[string][]byte {
     ephemeralPrivKey, _ := curve.GenerateKey(rand.Reader)
 
     // 3) Drei X3DH‑Secrets
-    dh1, _ := p.identityPrivKey.ECDH(remoteSpkPub)
+    dh1, _ := p.identityPrivKey.ECDH(remoteIdPub)
     dh2, _ := ephemeralPrivKey.ECDH(remoteIdPub)
-    dh3, _ := ephemeralPrivKey.ECDH(remoteSpkPub)
-    st.rootKey = hkdf32(bytes.Join([][]byte{dh1, dh2, dh3}, nil))
+
+    st.rootKey = hkdf32(append(dh1, dh2...))
 
     // 4) Start Double‑Ratchet
-    st.dhSendPrivKey = ephemeralPrivKey      // DHs = EKa
-    st.dhRecvPubKey  = remoteSpkPub           // DHr = SPK_b
+    st.dhSendPrivKey = ephemeralPrivKey
+    st.dhRecvPubKey  = remoteIdPub
 
     secret, _ := st.dhSendPrivKey.ECDH(st.dhRecvPubKey)
 		var chainKey []byte
@@ -155,14 +132,14 @@ func (p *Peer) AcceptSession(initMsg map[string][]byte) {
 
 		st := p.state(remoteIdPub.Bytes())
 
-    // dieselben drei DH‑Berechnungen, nur gespiegelt
-    dh1, _ := p.signedPreKeyPriv.ECDH(remoteIdPub)
+    // dieselben zwei DH‑Berechnungen, nur gespiegelt
+    dh1, _ := p.identityPrivKey.ECDH(remoteIdPub)
     dh2, _ := p.identityPrivKey.ECDH(remoteEkPub)
-    dh3, _ := p.signedPreKeyPriv.ECDH(remoteEkPub)
-    st.rootKey = hkdf32(bytes.Join([][]byte{dh1, dh2, dh3}, nil))
 
-    st.dhSendPrivKey = p.signedPreKeyPriv    // DHs = SPK_b
-    st.dhRecvPubKey  = remoteEkPub           // DHr = EK_a
+    st.rootKey = hkdf32(append(dh1, dh2...))
+
+    st.dhSendPrivKey = p.identityPrivKey
+    st.dhRecvPubKey  = remoteEkPub
 
     secret, _ := st.dhSendPrivKey.ECDH(st.dhRecvPubKey)
 		var chainKey []byte
