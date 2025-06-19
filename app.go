@@ -9,11 +9,16 @@ import (
 
 type App struct {
 	ctx       context.Context
+	storePath string
+	peerName string
 	session   *chat.Session
 }
 
 func NewApp() *App {
-	return &App{}
+	return &App{
+		storePath: "./data", // TODO
+		peerName: "Alice",
+	}
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -25,14 +30,24 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) setupDemo() error {
+	store, err := chat.NewStore(a.storePath)
+	if err != nil { log.Fatal(err) }
+
+	idPriv, err := store.EnsureIdentity()
+	if err != nil { log.Fatal(err) }
+
 	tp := chat.NewDummyTransport()
-	a.session = chat.NewSession("Alice", tp)
+
+	alicePeer := chat.NewPeerWithIdentity(a.peerName, idPriv)
+	a.session  = chat.NewSessionFromPeer(alicePeer, tp)
+
 	bobSess := chat.NewSession("Bob", tp)
 
 	if err := a.session.StartHandshake(bobSess.LocalBundle()); err != nil {
-		return err
+		log.Fatal(err)
 	}
-	return bobSess.StartHandshake(a.session.LocalBundle())
+
+	return nil
 }
 
 func (a *App) SendMessage(text string) {

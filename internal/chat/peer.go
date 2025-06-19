@@ -83,6 +83,14 @@ func NewPeer(name string) *Peer {
     }
 }
 
+func NewPeerWithIdentity(name string, idPriv *ecdh.PrivateKey) *Peer {
+	return &Peer{
+		Name:             name,
+		identityPrivKey:  idPriv,
+		sess:             make(map[string]*sessionState),
+	}
+}
+
 // Pre‑Key‑Bundle (wird veröffentlicht)
 func (p *Peer) Bundle() Bundle {
     return Bundle{

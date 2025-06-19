@@ -34,6 +34,12 @@ func NewSession(name string, transport Transport) *Session {
 	return s
 }
 
+func NewSessionFromPeer(p *Peer, t Transport) *Session {
+	s := &Session{ Name: p.Name, localPeer: p, transport: t }
+	if dt, ok := t.(*DummyTransport); ok { dt.Register(s) }
+	return s
+}
+
 func (s *Session) StartHandshake(remote Bundle) error {
 	s.remoteID = remote.IdentityPub
 
