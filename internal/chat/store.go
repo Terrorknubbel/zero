@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"cmp"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
@@ -10,8 +11,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -20,17 +23,25 @@ const (
 	masterKeyFile = "master.key"
 	identityFile  = "identity.id"
 	contactsDir   = "contacts"
+	msgDir        = "msgs"
 )
 
 var (
 	ErrNoIdentity = errors.New("identity not found")
-	ErrNoContact = errors.New("contact not found")
-	ErrNoSession = errors.New("session not found")
+	ErrNoContact  = errors.New("contact not found")
+	ErrNoSession  = errors.New("session not found")
 )
 
 type Store struct {
 	basePath  string
 	masterKey []byte
+}
+
+type CipherMessageWithMeta struct {
+	TS    time.Time `json:"ts"`
+	Out   bool      `json:"out"`
+	Plain string    `json:"plain,omitempty"`
+	CipherMessage
 }
 
 func NewStore(path string) (*Store, error) {
@@ -181,6 +192,7 @@ func (s *Store) wrap(plain []byte) ([]byte, error) {
 }
 
 func (s *Store) unwrap(buf []byte) ([]byte, error) {
+	log.Printf("[Store] unwrap len=%d", len(buf))
 	if len(buf) < 2 {
 		return nil, errors.New("blob too short")
 	}
@@ -188,7 +200,11 @@ func (s *Store) unwrap(buf []byte) ([]byte, error) {
 	if len(buf) < 2+n {
 		return nil, errors.New("invalid nonce length")
 	}
-	return s.decrypt(buf[2:2+n], buf[2+n:])
+	p, err := s.decrypt(buf[2:2+n], buf[2+n:])
+	if err != nil {
+		log.Println("  decrypt-error:", err)
+	}
+	return p, err
 }
 
 func b64Name(b []byte) string {
@@ -226,18 +242,22 @@ func (s *Store) decrypt(nonce, ct []byte) ([]byte, error) {
 
 func (s *Store) SaveSession(id []byte, st *sessionState) error {
 	dir := filepath.Join(s.basePath, "sessions", b64Name(id))
-	if err := os.MkdirAll(dir, 0o700); err != nil { return err }
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
 	ps := persistState{
 		Version: 1,
 		RootKey: st.rootKey,
 		DHSPriv: st.dhSendPrivKey.Bytes(),
-		DHRPub:   st.dhRecvPubKey.Bytes(),
+		DHRPub:  st.dhRecvPubKey.Bytes(),
 		SendCK:  st.sendCK(),
 		RecvCK:  st.recvCK(),
 	}
 	raw, _ := json.Marshal(ps)
 	buf, err := s.wrap(raw)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 
 	return os.WriteFile(filepath.Join(dir, "state.bin"), buf, 0o600)
 }
@@ -246,25 +266,118 @@ func (s *Store) LoadSession(id []byte) (*sessionState, error) {
 	path := filepath.Join(s.basePath, "sessions", b64Name(id), "state.bin")
 
 	raw, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) { return nil, ErrNoSession }
-	if err != nil { return nil, err }
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, ErrNoSession
+	}
+	if err != nil {
+		return nil, err
+	}
 	plain, _ := s.unwrap(raw)
 	var ps persistState
-	if err := json.Unmarshal(plain, &ps); err != nil { return nil, err }
-	if ps.Version != 1 { return nil, errors.New("unsupported version") }
+	if err := json.Unmarshal(plain, &ps); err != nil {
+		return nil, err
+	}
+	if ps.Version != 1 {
+		return nil, errors.New("unsupported version")
+	}
 
 	curve := ecdh.X25519()
 	dhs, _ := curve.NewPrivateKey(ps.DHSPriv)
 	dhr, _ := curve.NewPublicKey(ps.DHRPub)
 
 	return &sessionState{
-		rootKey:      ps.RootKey,
-		dhSendPrivKey:dhs,
-		dhRecvPubKey: dhr,
-		sendChain:    maybeRatchet(ps.SendCK),
-		recvChain:    maybeRatchet(ps.RecvCK),
+		rootKey:       ps.RootKey,
+		dhSendPrivKey: dhs,
+		dhRecvPubKey:  dhr,
+		sendChain:     maybeRatchet(ps.SendCK),
+		recvChain:     maybeRatchet(ps.RecvCK),
 	}, nil
 }
 
 // Test helper
 func (s *Store) MasterKey() []byte { return s.masterKey }
+
+func (s *Store) AppendMessage(id []byte, msg CipherMessage, out bool, plain []byte) error {
+	log.Printf("[Store] AppendMessage id=%s hdr=%dB non=%dB ct=%dB out=%v",
+		b64Name(id)[:8], len(msg.Header), len(msg.Nonce), len(msg.Cipher), out)
+	dir := filepath.Join(s.basePath, msgDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+
+	rec := CipherMessageWithMeta{
+		CipherMessage: msg,
+		TS:            time.Now().UTC(),
+		Out:           out,
+		Plain:         string(plain),
+	}
+
+	raw, _ := json.Marshal(rec) // JSON-Zeile
+	blob, err := s.wrap(raw)    // symmetrisch verschlüsseln
+	if err != nil {
+		log.Println("  wrap-error:", err)
+		return err
+	}
+	log.Printf("  frameLen=%d", len(blob))
+	frame := make([]byte, 4+len(blob))
+	binary.BigEndian.PutUint32(frame[:4], uint32(len(blob)))
+	copy(frame[4:], blob)
+
+	file := filepath.Join(dir, b64Name(id)+".log")
+	f, err := os.OpenFile(file,
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	_, err = f.Write(frame)
+	return err
+}
+
+func (s *Store) LoadMessages(id []byte, since time.Time) ([]CipherMessageWithMeta, error) {
+	path := filepath.Join(s.basePath, msgDir, b64Name(id)+".log")
+	log.Printf("[Store] LoadMessages id=%s since=%s", b64Name(id)[:8], since)
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		log.Println("  no file → 0 frames")
+		return nil, nil
+	}
+	if err != nil {
+		log.Println("  read-error:", err)
+		return nil, err
+	}
+	log.Printf("  fileSize=%d", len(data))
+	var out []CipherMessageWithMeta
+	for len(data) >= 4 {
+		ln := int(binary.BigEndian.Uint32(data[:4]))
+		if len(data) < 4+ln {
+			log.Println("  truncated frame, abort")
+			break
+		}
+		cipherFrame := data[4 : 4+ln]
+		data = data[4+ln:]
+
+		plain, err := s.unwrap(cipherFrame)
+		if err != nil {
+			continue
+		}
+
+		var rec CipherMessageWithMeta
+		if err := json.Unmarshal(plain, &rec); err != nil {
+			log.Println("  json-error:", err)
+			continue
+		}
+
+		if !since.IsZero() && rec.TS.Before(since) {
+			continue
+		}
+		out = append(out, rec)
+	}
+
+	slices.SortFunc(out, func(a, b CipherMessageWithMeta) int {
+		return cmp.Compare(a.TS.UnixNano(), b.TS.UnixNano())
+	})
+	log.Printf("  returning %d frames", len(out))
+	return out, nil
+}

@@ -4,4 +4,6 @@ import {chat} from '../models';
 
 export function GetContacts():Promise<Array<chat.Contact>>;
 
-export function SendMessage(arg1:string):Promise<void>;
+export function GetMessages(arg1:string,arg2:number):Promise<Array<chat.PlainMessage>>;
+
+export function SendMessage(arg1:string,arg2:string):Promise<void>;

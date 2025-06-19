@@ -4,6 +4,7 @@ import (
 	"crypto/ecdh"
 	"crypto/sha256"
 	"os"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -13,18 +14,18 @@ var _ = Describe("Session-Lifecycle über DummyTransport", func() {
 
 	It("baut Handshake auf und tauscht eine Nachricht aus", func() {
 
-		// ① Transport einmalig erzeugen
-		tp := NewDummyTransport()
+    tmpDir := GinkgoT().TempDir()
+    store, _ := NewStore(tmpDir)
 
-		// ② Alice- und Bob-Session registrieren
-		aliceSess := NewSession("Alice", tp)
-		bobSess   := NewSession("Bob", tp) // eigener State für Bob
+    tp    := NewDummyTransport()
+    alice := NewPeer("Alice")
+    bob   := NewPeer("Bob")
+
+		aliceSess := NewSessionFromPeer(alice, tp, store)
+		bobSess   := NewSessionFromPeer(bob,   tp, store)
 
 		// ③ Handshake (Alice → Bob)
 		Expect(aliceSess.StartHandshake(bobSess.localPeer.Bundle())).To(Succeed())
-
-		// ④ Simulierter Handshake (Bob → Alice)
-		Expect(bobSess.StartHandshake(aliceSess.localPeer.Bundle())).To(Succeed())
 
 		// ⑤ Nachricht senden
 		Expect(aliceSess.Send([]byte("Hi Bob – Testnachricht"))).To(Succeed())
@@ -93,3 +94,34 @@ func makeBob() *Peer {
     priv, _ := ecdh.X25519().NewPrivateKey(seed[:])
     return NewPeerWithIdentity("Bob", priv)
 }
+
+var _ = Describe("LoadPlainMessages", func() {
+
+	It("liefert entschlüsselte Logs in richtiger Reihenfolge", func() {
+		tmp, _ := os.MkdirTemp("", "msg_sess_*")
+		defer os.RemoveAll(tmp)
+
+		store, _ := NewStore(tmp)
+		alice, bob := NewPeer("Alice"), NewPeer("Bob")
+		dt := NewDummyTransport()
+
+		aSess := NewSessionFromPeer(alice, dt, store)
+		bSess := NewSessionFromPeer(bob,   dt, store)
+
+		Expect(aSess.StartHandshake(bob.Bundle())).To(Succeed())
+
+		Expect(aSess.Send([]byte("Hallo Bob"))).To(Succeed())
+		time.Sleep(5 * time.Millisecond) // klarer TS-Versatz
+		Expect(bSess.Send([]byte("Hi Alice"))).To(Succeed())
+
+		msgs, err := aSess.LoadPlainMessages(bob.IdentityPublicKey(), time.Time{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(msgs).To(HaveLen(2))
+
+		Expect(msgs[0].Out).To(BeTrue())               // von Alice
+		Expect(msgs[0].Text).To(Equal("Hallo Bob"))
+		Expect(msgs[1].Out).To(BeFalse())              // empfangen
+		Expect(msgs[1].Text).To(Equal("Hi Alice"))
+		Expect(msgs[0].At.Before(msgs[1].At)).To(BeTrue())
+	})
+})

@@ -14,7 +14,7 @@ import (
 )
 
 func check(err error) { if err != nil { log.Fatal(err) } }
-func b64(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
+func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
 func hkdf32(in []byte) []byte {
     out, err := hkdf.Key(sha256.New, in, nil, "", 32)

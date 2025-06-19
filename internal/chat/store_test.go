@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -108,6 +109,49 @@ var _ = Describe("Store.SaveSession / LoadSession", func() {
 		Expect(stGot.dhRecvPubKey.Bytes()).To(Equal(stOrig.dhRecvPubKey.Bytes()))
 		Expect(stGot.sendChain.state).To(Equal(stOrig.sendChain.state))
 		Expect(stGot.recvChain.state).To(Equal(stOrig.recvChain.state))
+	})
+})
+
+var _ = Describe("Store.AppendMessage / LoadMessages", func() {
+
+	It("appends, retrieves & keeps messages encrypted on disk", func() {
+		tmp, _ := os.MkdirTemp("", "store_msg_*")
+		defer os.RemoveAll(tmp)
+
+		store, _ := NewStore(tmp)
+
+		remoteID := []byte("peer-id-dummy") // Datei-Name basiert auf base64(ID)
+
+		// Zwei Dummy-Nachrichten erstellen
+		m1 := CipherMessage{Header: []byte("hdr-1"), Nonce: []byte("n1"), Cipher: []byte("cipher-1")}
+		m2 := CipherMessage{Header: []byte("hdr-2"), Nonce: []byte("n2"), Cipher: []byte("cipher-2")}
+
+		Expect(store.AppendMessage(remoteID, m1, true, []byte("cipher-1"))).To(Succeed())  // outgoing
+		time.Sleep(10 * time.Millisecond)                               // klarer TS-Abstand
+		Expect(store.AppendMessage(remoteID, m2, false, []byte("cipher-2"))).To(Succeed()) // incoming
+
+		// ─── Laden ohne Filter ───────────────────────────────
+		msgs, err := store.LoadMessages(remoteID, time.Time{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(msgs).To(HaveLen(2))
+
+		Expect(msgs[0].Out).To(BeTrue())
+		Expect(msgs[0].Header).To(Equal(m1.Header))
+		Expect(msgs[1].Out).To(BeFalse())
+		Expect(msgs[1].Cipher).To(Equal(m2.Cipher))
+		Expect(msgs[0].TS.Before(msgs[1].TS)).To(BeTrue())
+
+		// ─── since-Filter (nur die 2. Nachricht) ─────────────
+		since := msgs[1].TS.Add(-1 * time.Nanosecond)
+		onlyLast, _ := store.LoadMessages(remoteID, since)
+		Expect(onlyLast).To(HaveLen(1))
+		Expect(onlyLast[0].Header).To(Equal(m2.Header))
+
+		// ─── Datei ist verschlüsselt (klartext darf nicht vorkommen) ─
+		raw, err := os.ReadFile(filepath.Join(tmp, "msgs", b64Name(remoteID)+".log"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(raw)).NotTo(ContainSubstring("hdr-1"))   // Header im Klartext?
+		Expect(string(raw)).NotTo(ContainSubstring("cipher-2")) // Cipher-Payload im Klartext?
 	})
 })
 

@@ -1,15 +1,15 @@
 <template>
   <div class="app-container">
     <ContactList
-      :contacts="contactPreviews"
-      :active-id="activeContact?.id ?? null"
+      :contacts="contacts"
+      :active-id="activeId"
       @select="handleSelect"
     />
 
     <ChatWindow
-      v-if="activeContact"
-      :contact="activeContact"
-      :messages="messages[activeContact.id] || []"
+      v-if="activeId"
+      :contact="contacts.find(c => c.id === activeId)!"
+      :messages="messages[activeId] || []"
       @send="handleSend"
     />
 
@@ -19,61 +19,48 @@
   </div>
 </template>
 
-<script lang="ts" setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+<script setup lang="ts">
+import { onMounted, ref, watch } from 'vue'
+import { storeToRefs }           from 'pinia'
+import { useChat }               from './stores/chat'
+
 import ContactList from './components/ContactList.vue'
 import ChatWindow   from './components/ChatWindow.vue'
-import { SendMessage, GetContacts } from '../wailsjs/go/main/App'
-import type { Contact } from './types'
 
-interface Message { id: string; contactId: string; text: string; mine: boolean; timestamp: Date }
+/* ───────────────────────── Pinia-Store ───────────────────────── */
+const chat = useChat()
+const { contacts, messages } = storeToRefs(chat)
 
-const contacts = ref<Contact[]>([])
-
-onMounted(async () => {
-  const list = await GetContacts()
-  contacts.value = list.map((c: { id_pub: number[]; name: string }) => ({
-    id:   c.id_pub.toString(),
-    name: c.name,
-    unread: 0,
-    last: ''
-  }))
-  console.log(contacts.value)
-})
-
+/* ───────────────────────── UI-State ──────────────────────────── */
 const activeId = ref<string | null>(null)
-const messages = reactive<Record<string, Message[]>>({})
 
-const contactPreviews = computed<Contact[]>(() => {
-  return contacts.value.map(c => {
-    const conv    = messages[c.id] ?? []
-    const lastMsg = conv.length ? conv[conv.length - 1].text : ''
-    return { ...c, last: lastMsg }
-  })
+/* Erst beim App-Start die Kontaktliste holen */
+onMounted(chat.loadContacts)
+
+/* Immer wenn ein Kontakt aktiv wird ⇒ Verlauf aus Backend nachladen */
+watch(activeId, async id => {
+  console.log('[Vue] activeId changed →', id)
+  if (id) {
+    await chat.loadHistory(id)   // jedes Mal frisch holen
+  }
 })
-
-const activeContact = computed<Contact | null>(() =>
-  contactPreviews.value.find(c => c.id === activeId.value) || null
-)
 
 function handleSelect(id: string) {
   activeId.value = id
 }
 
+/* Senden + anschließend Verlauf erneut laden, damit die neue Nachricht
+   (und evtl. Empfangs-Echo) garantiert aus dem Backend kommt */
 async function handleSend(text: string) {
-  if (!activeContact.value) return
+  const id = activeId.value
+  if (!id) return
 
-  const contactId = activeContact.value.id
-  const msg: Message = {
-    id: crypto.randomUUID(),
-    contactId,
-    text,
-    mine: true,
-    timestamp: new Date(),
+  try {
+    await chat.send(id, text)    // legt Datei & Session an
+    await chat.loadHistory(id)   // direkt danach refreshen
+  } catch (e) {
+    console.error('Send failed', e)
   }
-
-  ;(messages[contactId] ||= []).push(msg) // optimistic update
-  await SendMessage(text)                 // Wails‑Backend‑Call
 }
 </script>
 
@@ -93,3 +80,4 @@ async function handleSend(text: string) {
   opacity: 0.6;
 }
 </style>
+
