@@ -20,26 +20,29 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import ContactList from './components/ContactList.vue'
 import ChatWindow   from './components/ChatWindow.vue'
-import { SendMessage } from '../wailsjs/go/main/App'
+import { SendMessage, GetContacts } from '../wailsjs/go/main/App'
 import type { Contact } from './types'
 
 interface Message { id: string; contactId: string; text: string; mine: boolean; timestamp: Date }
 
-// --- Demo‑Daten (platzhalter) ---
-const contacts = ref<Contact[]>([
-  { id: '1', name: 'Alice', unread: 2 },
-  { id: '2', name: 'Bob' },
-])
+const contacts = ref<Contact[]>([])
+
+onMounted(async () => {
+  const list = await GetContacts()
+  contacts.value = list.map((c: { id_pub: number[]; name: string }) => ({
+    id:   c.id_pub.toString(),
+    name: c.name,
+    unread: 0,
+    last: ''
+  }))
+  console.log(contacts.value)
+})
 
 const activeId = ref<string | null>(null)
-const messages = reactive<Record<string, Message[]>>({
-  '1': [
-    { id: 'm1', contactId: '1', text: 'Hi there! 👋', mine: false, timestamp: new Date() },
-  ],
-})
+const messages = reactive<Record<string, Message[]>>({})
 
 const contactPreviews = computed<Contact[]>(() => {
   return contacts.value.map(c => {
