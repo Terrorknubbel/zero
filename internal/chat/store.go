@@ -24,7 +24,8 @@ const (
 
 var (
 	ErrNoIdentity = errors.New("identity not found")
-	ErrNoContact  = errors.New("contact not found")
+	ErrNoContact = errors.New("contact not found")
+	ErrNoSession = errors.New("session not found")
 )
 
 type Store struct {
@@ -221,6 +222,48 @@ func (s *Store) decrypt(nonce, ct []byte) ([]byte, error) {
 		return nil, err
 	}
 	return gcm.Open(nil, nonce, ct, nil)
+}
+
+func (s *Store) SaveSession(id []byte, st *sessionState) error {
+	dir := filepath.Join(s.basePath, "sessions", b64Name(id))
+	if err := os.MkdirAll(dir, 0o700); err != nil { return err }
+	ps := persistState{
+		Version: 1,
+		RootKey: st.rootKey,
+		DHSPriv: st.dhSendPrivKey.Bytes(),
+		DHRPub:   st.dhRecvPubKey.Bytes(),
+		SendCK:  st.sendCK(),
+		RecvCK:  st.recvCK(),
+	}
+	raw, _ := json.Marshal(ps)
+	buf, err := s.wrap(raw)
+	if err != nil { return err }
+
+	return os.WriteFile(filepath.Join(dir, "state.bin"), buf, 0o600)
+}
+
+func (s *Store) LoadSession(id []byte) (*sessionState, error) {
+	path := filepath.Join(s.basePath, "sessions", b64Name(id), "state.bin")
+
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) { return nil, ErrNoSession }
+	if err != nil { return nil, err }
+	plain, _ := s.unwrap(raw)
+	var ps persistState
+	if err := json.Unmarshal(plain, &ps); err != nil { return nil, err }
+	if ps.Version != 1 { return nil, errors.New("unsupported version") }
+
+	curve := ecdh.X25519()
+	dhs, _ := curve.NewPrivateKey(ps.DHSPriv)
+	dhr, _ := curve.NewPublicKey(ps.DHRPub)
+
+	return &sessionState{
+		rootKey:      ps.RootKey,
+		dhSendPrivKey:dhs,
+		dhRecvPubKey: dhr,
+		sendChain:    maybeRatchet(ps.SendCK),
+		recvChain:    maybeRatchet(ps.RecvCK),
+	}, nil
 }
 
 // Test helper

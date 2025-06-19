@@ -206,3 +206,18 @@ func (p *Peer) Decrypt(remoteID []byte, header []byte, nonce []byte, ct []byte) 
 		return p.Name, plaintext
 }
 
+func (st *sessionState) sendCK() []byte {
+	if st.sendChain == nil { return nil }
+	return append([]byte(nil), st.sendChain.state...)
+}
+func (st *sessionState) recvCK() []byte {
+	if st.recvChain == nil { return nil }
+	return append([]byte(nil), st.recvChain.state...)
+}
+
+func maybeRatchet(k []byte) *SymmRatchet {
+	if len(k) == 0 {
+		return nil
+	}
+	return &SymmRatchet{state: append([]byte(nil), k...)}
+}

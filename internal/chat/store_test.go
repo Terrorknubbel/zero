@@ -1,21 +1,20 @@
-package chat_test
+package chat
 
 import (
 	"crypto/ecdh"
+	"crypto/rand"
 	"encoding/binary"
 	"os"
 	"path/filepath"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
-	"zero/internal/chat"
 )
 
 var _ = Describe("Store.EnsureIdentity", func() {
 	var (
 		tmpDir string
-		store  *chat.Store
+		store  *Store
 		err    error
 		key1   *ecdh.PrivateKey
 	)
@@ -25,7 +24,7 @@ var _ = Describe("Store.EnsureIdentity", func() {
 		tmpDir, err = os.MkdirTemp("", "store_test_*")
 		Expect(err).NotTo(HaveOccurred())
 
-		store, err = chat.NewStore(tmpDir)
+		store, err = NewStore(tmpDir)
 		Expect(err).NotTo(HaveOccurred())
 	})
 
@@ -41,7 +40,7 @@ var _ = Describe("Store.EnsureIdentity", func() {
 		Expect(filepath.Join(tmpDir, "identity.id")).To(BeAnExistingFile())
 
 		// Zweiter Store, derselbe Pfad → muss denselben IK & MK laden
-		store2, err := chat.NewStore(tmpDir)
+		store2, err := NewStore(tmpDir)
 		Expect(err).NotTo(HaveOccurred())
 
 		key2, err := store2.EnsureIdentity()
@@ -50,7 +49,7 @@ var _ = Describe("Store.EnsureIdentity", func() {
 		Expect(store2.EnsureIdentity).NotTo(BeNil())
 
 		// Master-Keys identisch
-		Expect(store2MasterKey(store2)).To(Equal(storeMasterKey(store)))
+		Expect(storeMasterKey(store2)).To(Equal(storeMasterKey(store)))
 	})
 
 	It("stores identity encrypted (ciphertext ≠ plaintext)", func() {
@@ -68,7 +67,50 @@ var _ = Describe("Store.EnsureIdentity", func() {
 	})
 })
 
+func rand32() []byte {
+	b := make([]byte, 32)
+	rand.Read(b)
+	return b
+}
+var _ = Describe("Store.SaveSession / LoadSession", func() {
+
+	It("persistiert und rekonstruiert einen kompletten sessionState", func() {
+		tmp, _ := os.MkdirTemp("", "store_ss_*")
+		defer os.RemoveAll(tmp)
+
+		store, _ := NewStore(tmp)
+
+		// ── künstlichen State erzeugen ────────────────────────
+		curve := ecdh.X25519()
+
+		dhSend, _ := curve.GenerateKey(rand.Reader)
+		dhRecvPub := dhSend.PublicKey() // irgendein PubKey
+
+		stOrig := &sessionState{
+			rootKey:      rand32(),
+			dhSendPrivKey: dhSend,
+			dhRecvPubKey:  dhRecvPub,
+			sendChain:     NewSymmRatchet(rand32()),
+			recvChain:     NewSymmRatchet(rand32()),
+		}
+
+		remoteID := dhRecvPub.Bytes() // ID des Gegenüber
+
+		// ── speichern & laden ────────────────────────────────
+		Expect(store.SaveSession(remoteID, stOrig)).To(Succeed())
+
+		stGot, err := store.LoadSession(remoteID)
+		Expect(err).NotTo(HaveOccurred())
+
+		// ── Feld-Vergleiche ───────────────────────────────────
+		Expect(stGot.rootKey).To(Equal(stOrig.rootKey))
+		Expect(stGot.dhSendPrivKey.Bytes()).To(Equal(stOrig.dhSendPrivKey.Bytes()))
+		Expect(stGot.dhRecvPubKey.Bytes()).To(Equal(stOrig.dhRecvPubKey.Bytes()))
+		Expect(stGot.sendChain.state).To(Equal(stOrig.sendChain.state))
+		Expect(stGot.recvChain.state).To(Equal(stOrig.recvChain.state))
+	})
+})
+
 // Hilfsfunktionen, damit wir auf private Felder zugreifen können
-func storeMasterKey(s *chat.Store) []byte { return s.MasterKey() }
-func store2MasterKey(s *chat.Store) []byte { return s.MasterKey() }
+func storeMasterKey(s *Store) []byte { return s.MasterKey() }
 
